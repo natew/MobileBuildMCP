@@ -313,16 +313,18 @@ export async function checkMp4Finalized(path: string): Promise<Mp4FinalizationRe
         return { finalized: false, reason: `truncated box header at byte ${offset}` };
       }
       let boxSize = header.readUInt32BE(0);
+      let headerSize = 8;
       const type = header.toString('latin1', 4, 8);
       if (boxSize === 1) {
         if (bytesRead < 16) {
           return { finalized: false, reason: `truncated box header at byte ${offset}` };
         }
         boxSize = Number(header.readBigUInt64BE(8));
+        headerSize = 16;
       } else if (boxSize === 0) {
         boxSize = size - offset;
       }
-      if (boxSize < 8 || offset + boxSize > size) {
+      if (boxSize < headerSize || offset + boxSize > size) {
         return {
           finalized: false,
           reason: `'${type}' box at byte ${offset} declares ${boxSize} bytes but the file ends at ${size}`,

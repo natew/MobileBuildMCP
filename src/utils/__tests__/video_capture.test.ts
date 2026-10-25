@@ -44,6 +44,23 @@ describe('checkMp4Finalized', () => {
     expect(cutMoov.finalized).toBe(false);
   });
 
+  it('rejects an extended-size box smaller than its own 16 byte header', async () => {
+    const extended = Buffer.alloc(16);
+    extended.writeUInt32BE(1, 0);
+    extended.write('moov', 4, 'latin1');
+    extended.writeBigUInt64BE(8n, 8);
+    const result = await checkMp4Finalized(writeMp4([ftyp, extended]));
+    expect(result.finalized).toBe(false);
+  });
+
+  it('accepts a valid extended-size moov box', async () => {
+    const extended = Buffer.alloc(16);
+    extended.writeUInt32BE(1, 0);
+    extended.write('moov', 4, 'latin1');
+    extended.writeBigUInt64BE(16n, 8);
+    expect(await checkMp4Finalized(writeMp4([ftyp, mdat, extended]))).toEqual({ finalized: true });
+  });
+
   it('rejects an empty file', async () => {
     expect((await checkMp4Finalized(writeMp4([]))).finalized).toBe(false);
   });
@@ -51,18 +68,26 @@ describe('checkMp4Finalized', () => {
 
 describe('stopSimulatorVideoCapture process outcome', () => {
   const helpers = { getAxePath: () => '/axe', getBundledAxeEnvironment: () => ({}) };
-  const executorFor = (script: string) =>
-    (async () => ({
-      success: true,
-      output: '',
-      process: spawn(process.execPath, ['-e', script]),
-    })) as never;
+  // resolves once the child has printed, which its scripts do after installing the SIGINT handler
+  const executorFor = (script: string, ready: { promise?: Promise<void> }) =>
+    (async () => {
+      const child = spawn(process.execPath, ['-e', script]);
+      ready.promise = new Promise<void>((resolve) => {
+        child.stdout.once('data', () => resolve());
+      });
+      return { success: true, output: '', process: child };
+    }) as never;
 
   it('reports a child that ignores the stop signal as force-killed with its output', async () => {
     const script =
       "process.on('SIGINT',()=>{});console.log('Saved /tmp/t.mp4');setInterval(()=>{},1000)";
-    await startSimulatorVideoCapture({ simulatorUuid: 'sim-kill' }, executorFor(script), helpers);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    const ready: { promise?: Promise<void> } = {};
+    await startSimulatorVideoCapture(
+      { simulatorUuid: 'sim-kill' },
+      executorFor(script, ready),
+      helpers,
+    );
+    await ready.promise;
     const result = await stopSimulatorVideoCapture({ simulatorUuid: 'sim-kill' }, null as never);
     expect(result).toMatchObject({
       stopped: true,
@@ -74,8 +99,13 @@ describe('stopSimulatorVideoCapture process outcome', () => {
   it('reports a child that exits on the stop signal as not force-killed', async () => {
     const script =
       "process.on('SIGINT',()=>process.exit(0));console.log('Saved /tmp/t.mp4');setInterval(()=>{},1000)";
-    await startSimulatorVideoCapture({ simulatorUuid: 'sim-ok' }, executorFor(script), helpers);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    const ready: { promise?: Promise<void> } = {};
+    await startSimulatorVideoCapture(
+      { simulatorUuid: 'sim-ok' },
+      executorFor(script, ready),
+      helpers,
+    );
+    await ready.promise;
     const result = await stopSimulatorVideoCapture({ simulatorUuid: 'sim-ok' }, null as never);
     expect(result).toMatchObject({ stopped: true, forcedKill: false, exitCode: 0 });
   }, 15000);
